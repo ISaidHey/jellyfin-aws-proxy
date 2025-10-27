@@ -2,7 +2,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
   }
   required_version = ">= 1.5.0"
@@ -97,11 +97,11 @@ resource "aws_security_group" "ec2_sg" {
 
   # HTTPS
   ingress {
-    description      = "HTTPS"
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    cidr_blocks      = ["0.0.0.0/0"]
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   # WireGuard
@@ -118,6 +118,14 @@ resource "aws_security_group" "ec2_sg" {
     description = "Allow HTTPS to DNS provider APIs"
     from_port   = 443
     to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow HTTP outbound"
+    from_port   = 80
+    to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -145,6 +153,32 @@ resource "aws_iam_role" "ec2_route53_role" {
     }]
   })
 }
+data aws_caller_identity "who_am_i" {}
+data aws_region "region" {}
+
+resource "aws_iam_policy" "cloudwatch_policy" {
+  name        = "jellyfin-cloudwatch-policy"
+  description = "Allow EC2 to write to cloudwatch"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:${data.aws_region.region.id}:${data.aws_caller_identity.who_am_i.account_id}:log-group:/ec2/jellyfin:*"
+      }
+    ]
+  })
+}
+
+resource "aws_cloudwatch_log_group" "cloudwatch_group" {
+  name = "/ec2/jellyfin"
+  retention_in_days = 7
+}
 
 resource "aws_iam_policy" "route53_policy" {
   name        = "jellyfin-route53-policy"
@@ -160,7 +194,7 @@ resource "aws_iam_policy" "route53_policy" {
           "route53:ChangeResourceRecordSets",
           "route53:ListResourceRecordSets"
         ]
-        Resource = "arn:aws:route53:::hostedzone/Z06295198NOV6FIFUYAB"
+        Resource = "arn:aws:route53:::hostedzone/${var.zone_id}"
       },
       {
         Sid    = "ListHostedZonesAndChanges"
@@ -178,6 +212,11 @@ resource "aws_iam_policy" "route53_policy" {
 resource "aws_iam_role_policy_attachment" "attach_route53" {
   role       = aws_iam_role.ec2_route53_role.name
   policy_arn = aws_iam_policy.route53_policy.arn
+}
+
+resource "aws_iam_role_policy_attachment" "attach_cloudwatch" {
+  role       = aws_iam_role.ec2_route53_role.name
+  policy_arn = aws_iam_policy.cloudwatch_policy.arn
 }
 
 resource "aws_iam_role_policy_attachment" "attach_ssm" {
@@ -205,6 +244,7 @@ resource "aws_instance" "caddy_ec2" {
 
   user_data = file("${path.module}/user_data.sh")
 
+  depends_on = [aws_internet_gateway.igw]
   tags = merge(
     local.tags_common,
     {
@@ -238,7 +278,7 @@ resource "aws_eip_association" "caddy_eip_assoc" {
 # Route 53 Record
 # -------------------
 resource "aws_route53_record" "jellyfin_dns" {
-  zone_id = "Z06295198NOV6FIFUYAB"
+  zone_id = var.zone_id
   name    = "media"
   type    = "A"
   ttl     = 300
