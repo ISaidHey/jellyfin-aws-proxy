@@ -129,6 +129,22 @@ resource "aws_security_group" "ec2_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  egress {
+    description = "Allow UDP outbound for DNS"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow TCP outbound for DNS"
+    from_port   = 53
+    to_port     = 53
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   tags = {
     Name = "pigs-in-space-ec2-sg"
   }
@@ -195,7 +211,9 @@ resource "aws_iam_policy" "route53_policy" {
         Effect = "Allow"
         Action = [
           "route53:ListHostedZones",
-          "route53:GetChange"
+          "route53:GetChange",
+          "route53:ListHostedZonesByName",
+          "route53:GetHostedZone"
         ]
         Resource = "*"
       }

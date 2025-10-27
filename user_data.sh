@@ -53,7 +53,7 @@ apt update && apt install -y git
 curl -LO https://go.dev/dl/go1.25.3.linux-amd64.tar.gz
 rm -rf /usr/local/go
 tar -C /usr/local -xzf go1.25.3.linux-amd64.tar.gz
-export PATH=/usr/local/go/bin:$PATH
+export PATH=/usr/local/go/bin:/root/go/bin:$PATH
 export GOPATH=/root/go
 export GOCACHE=/tmp/gocache
 export HOME=/root
@@ -99,7 +99,26 @@ pigs-in-space.isaidhey.com {
 EOF
 
 caddy validate --config /etc/caddy/Caddyfile
-caddy install --system-service --config /etc/caddy/Caddyfile
+
+cat <<'EOF' >/etc/systemd/system/caddy.service
+[Unit]
+Description=Caddy web server
+Documentation=https://caddyserver.com/docs/
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile
+Restart=on-failure
+User=root
+Group=root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
 systemctl enable caddy
 systemctl start caddy
 
