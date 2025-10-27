@@ -14,7 +14,7 @@ provider "aws" {
 
 locals {
   tags_common = {
-    Project     = "jellyfin"
+    Project     = "media"
     Environment = "production"
     ManagedBy   = "OpenTofu"
   }
@@ -32,7 +32,7 @@ resource "aws_vpc" "main" {
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-vpc"
+      Name = "pigs-in-space-vpc"
     }
   )
 }
@@ -47,7 +47,7 @@ resource "aws_subnet" "public" {
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-public-subnet"
+      Name = "pigs-in-space-public-subnet"
     }
   )
 }
@@ -59,7 +59,7 @@ resource "aws_internet_gateway" "igw" {
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-igw"
+      Name = "pigs-in-space-igw"
     }
   )
 }
@@ -76,7 +76,7 @@ resource "aws_route_table" "public" {
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-public-rt"
+      Name = "pigs-in-space-public-rt"
     }
   )
 }
@@ -91,7 +91,7 @@ resource "aws_route_table_association" "public" {
 # Security Group
 # -------------------
 resource "aws_security_group" "ec2_sg" {
-  name        = "jellyfin-ec2-sg"
+  name        = "pigs-in-space-ec2-sg"
   description = "Allow HTTPS inbound and WireGuard outbound"
   vpc_id      = aws_vpc.main.id
 
@@ -133,7 +133,7 @@ resource "aws_security_group" "ec2_sg" {
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-ec2-sg"
+      Name = "pigs-in-space-ec2-sg"
     }
   )
 }
@@ -142,7 +142,7 @@ resource "aws_security_group" "ec2_sg" {
 # IAM Role for Route 53 updates
 # -------------------
 resource "aws_iam_role" "ec2_route53_role" {
-  name = "jellyfin-ec2-route53-role"
+  name = "pigs-in-space-ec2-route53-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -157,7 +157,7 @@ data aws_caller_identity "who_am_i" {}
 data aws_region "region" {}
 
 resource "aws_iam_policy" "cloudwatch_policy" {
-  name        = "jellyfin-cloudwatch-policy"
+  name        = "pigs-in-space-cloudwatch-policy"
   description = "Allow EC2 to write to cloudwatch"
 
   policy = jsonencode({
@@ -169,19 +169,19 @@ resource "aws_iam_policy" "cloudwatch_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.region.id}:${data.aws_caller_identity.who_am_i.account_id}:log-group:/ec2/jellyfin:*"
+        Resource = "arn:aws:logs:${data.aws_region.region.id}:${data.aws_caller_identity.who_am_i.account_id}:log-group:/ec2/isaidhey/pigs-in-space:*"
       }
     ]
   })
 }
 
 resource "aws_cloudwatch_log_group" "cloudwatch_group" {
-  name = "/ec2/jellyfin"
+  name = "/ec2/isaidhey/pigs-in-space"
   retention_in_days = 7
 }
 
 resource "aws_iam_policy" "route53_policy" {
-  name        = "jellyfin-route53-policy"
+  name        = "pigs-in-space-route53-policy"
   description = "Allow EC2 to update Route 53 records"
 
   policy = jsonencode({
@@ -229,8 +229,18 @@ resource "aws_iam_role_policy_attachment" "attach_ssm" {
 # -------------------
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "jellyfin-ec2-profile"
+  name = "pigs-in-space-ec2-profile"
   role = aws_iam_role.ec2_route53_role.name
+}
+
+data "template_file" "user_data" {
+  template = file("${path.module}/user_data.sh")
+
+  vars = {
+    ec2_public_ip = aws_eip.caddy_eip.public_ip
+  }
+
+  depends_on = [aws_eip.caddy_eip]
 }
 
 resource "aws_instance" "caddy_ec2" {
@@ -242,13 +252,13 @@ resource "aws_instance" "caddy_ec2" {
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
   monitoring                  = true
 
-  user_data = file("${path.module}/user_data.sh")
+  user_data = data.template_file.user_data.rendered
 
   depends_on = [aws_internet_gateway.igw]
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-caddy"
+      Name = "pigs-in-space-caddy"
       SSM  = "enabled"
     }
   )
@@ -262,7 +272,7 @@ resource "aws_eip" "caddy_eip" {
   tags = merge(
     local.tags_common,
     {
-      Name = "jellyfin-eip"
+      Name = "pigs-in-space-eip"
     }
   )
 }
@@ -277,9 +287,9 @@ resource "aws_eip_association" "caddy_eip_assoc" {
 # -------------------
 # Route 53 Record
 # -------------------
-resource "aws_route53_record" "jellyfin_dns" {
+resource "aws_route53_record" "pigs_in_space_dns" {
   zone_id = var.zone_id
-  name    = "media"
+  name    = "pigs-in-space"
   type    = "A"
   ttl     = 300
   records = [aws_eip.caddy_eip.public_ip]

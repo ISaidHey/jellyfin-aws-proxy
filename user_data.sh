@@ -17,13 +17,13 @@ cat <<'EOF' >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
         "collect_list": [
           {
             "file_path": "/var/log/cloud-init.log",
-            "log_group_name": "/ec2/jellyfin",
+            "log_group_name": "/ec2/isaidhey/pigs-in-space",
             "log_stream_name": "{instance_id}-cloud-init",
             "retention_in_days": 7
           },
           {
             "file_path": "/var/log/cloud-init-output.log",
-            "log_group_name": "/ec2/jellyfin",
+            "log_group_name": "/ec2/isaidhey/pigs-in-space",
             "log_stream_name": "{instance_id}-cloud-init-output",
             "retention_in_days": 7
           }
@@ -83,5 +83,56 @@ EOF
 systemctl enable caddy
 systemctl start caddy
 
+
+# 1️⃣ Generate server keys
+SERVER_PRIV_KEY=$(wg genkey)
+SERVER_PUB_KEY=$(echo "$SERVER_PRIV_KEY" | wg pubkey)
+
+# 2️⃣ Optionally generate a client key
+CLIENT_PRIV_KEY=$(wg genkey)
+CLIENT_PUB_KEY=$(echo "$CLIENT_PRIV_KEY" | wg pubkey)
+
+# 3️⃣ Write wg0.conf
+cat <<EOF >/etc/wireguard/wg0.conf
+[Interface]
+Address = 10.10.0.1/24
+ListenPort = 51820
+PrivateKey = $SERVER_PRIV_KEY
+SaveConfig = true
+
+# Enable NAT for VPN clients
+PostUp = iptables -t nat -A POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -s 10.10.0.0/24 -o eth0 -j MASQUERADE
+
+[Peer]
+# Example client
+PublicKey = $CLIENT_PUB_KEY
+AllowedIPs = 10.10.0.2/32
+EOF
+
+# 4️⃣ Enable IP forwarding
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# 5️⃣ Enable and start WireGuard
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
+
+# 6️⃣ Output client config to /home/ubuntu/wg-client.conf
+cat <<EOF >/home/ubuntu/wg-client.conf
+[Interface]
+PrivateKey = $CLIENT_PRIV_KEY
+Address = 10.10.0.2/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $SERVER_PUB_KEY
+Endpoint = ${ec2_public_ip}:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+EOF
+
+chown ubuntu:ubuntu /home/ubuntu/wg-client.conf
+chmod 600 /home/ubuntu/wg-client.conf
+unset CLIENT_PRIV_KEY
+unset CLIENT_PUB_KEY
