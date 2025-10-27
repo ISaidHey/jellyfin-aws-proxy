@@ -95,21 +95,30 @@ resource "aws_security_group" "ec2_sg" {
   description = "Allow HTTPS inbound and WireGuard outbound"
   vpc_id      = aws_vpc.main.id
 
-  # Inbound: HTTPS
+  # HTTPS
   ingress {
     description      = "HTTPS"
     from_port        = 443
     to_port          = 443
     protocol         = "tcp"
     cidr_blocks      = ["0.0.0.0/0"]
-    ipv6_cidr_blocks = ["::/0"]
   }
 
-  # Outbound: All traffic
+  # WireGuard
   egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
+    description = "WireGuard outbound"
+    from_port   = 51820
+    to_port     = 51820
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # DNS management
+  egress {
+    description = "Allow HTTPS to DNS provider APIs"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -143,16 +152,26 @@ resource "aws_iam_policy" "route53_policy" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Action = [
-        "route53:ListHostedZones",
-        "route53:GetChange",
-        "route53:ChangeResourceRecordSets",
-        "route53:ListResourceRecordSets",
-      ]
-      Effect   = "Allow"
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Sid    = "ChangeSpecificZone"
+        Effect = "Allow"
+        Action = [
+          "route53:ChangeResourceRecordSets",
+          "route53:ListResourceRecordSets"
+        ]
+        Resource = "arn:aws:route53:::hostedzone/Z06295198NOV6FIFUYAB"
+      },
+      {
+        Sid    = "ListHostedZonesAndChanges"
+        Effect = "Allow"
+        Action = [
+          "route53:ListHostedZones",
+          "route53:GetChange"
+        ]
+        Resource = "*"
+      }
+    ]
   })
 }
 
@@ -169,19 +188,6 @@ resource "aws_iam_role_policy_attachment" "attach_ssm" {
 # -------------------
 # EC2 Instance
 # -------------------
-
-resource "aws_eip" "caddy_eip" {
-  instance = aws_instance.caddy_ec2.id
-
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "jellyfin-eip"
-    }
-  )
-}
-
-
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "jellyfin-ec2-profile"
@@ -192,10 +198,12 @@ resource "aws_instance" "caddy_ec2" {
   ami                         = "ami-0cfde0ea8edd312d4" # Ubuntu 24.04 LTS in us-east-2
   instance_type               = "t3.micro"
   subnet_id                   = aws_subnet.public.id
-  key_name                    = aws_key_pair.ec2_key.key_name
   vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
   associate_public_ip_address = true
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
+  monitoring                  = true
+
+  user_data = file("${path.module}/user_data.sh")
 
   tags = merge(
     local.tags_common,
@@ -204,34 +212,40 @@ resource "aws_instance" "caddy_ec2" {
       SSM  = "enabled"
     }
   )
+}
 
-  user_data = <<-EOF
-              #!/bin/bash
-              set -eux
-              apt update -y
-              apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gpg
+resource "aws_eip" "caddy_eip" {
+  domain = "vpc"
 
-              # Install Caddy (modern and secure)
-              curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-archive-keyring.gpg
-              curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy.list
-              apt update
-              apt install -y caddy
+  depends_on = [aws_internet_gateway.igw]
 
-              # Install WireGuard (optional)
-              apt install -y wireguard
+  tags = merge(
+    local.tags_common,
+    {
+      Name = "jellyfin-eip"
+    }
+  )
+}
 
-              systemctl enable caddy
-              systemctl start caddy
-              EOF
+resource "aws_eip_association" "caddy_eip_assoc" {
+  instance_id   = aws_instance.caddy_ec2.id
+  allocation_id = aws_eip.caddy_eip.id
+
+  depends_on = [aws_instance.caddy_ec2]
 }
 
 # -------------------
 # Route 53 Record
 # -------------------
 resource "aws_route53_record" "jellyfin_dns" {
-  zone_id = "YOUR_HOSTED_ZONE_ID" # replace with your Route 53 Hosted Zone ID
-  name    = "media"               # subdomain: media.example.com
+  zone_id = "Z06295198NOV6FIFUYAB"
+  name    = "media"
   type    = "A"
   ttl     = 300
   records = [aws_eip.caddy_eip.public_ip]
+}
+
+
+output "ec2_public_ip" {
+  value = aws_eip.caddy_eip.public_ip
 }
