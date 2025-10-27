@@ -6,8 +6,7 @@ set -o pipefail
 
 for i in {1..5}; do apt update -y && break || sleep 10; done
 curl -Lo /tmp/amazon-cloudwatch-agent.deb https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-sudo dpkg -i /tmp/amazon-cloudwatch-agent.deb
-
+dpkg -i /tmp/amazon-cloudwatch-agent.deb
 
 cat <<'EOF' >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
 {
@@ -47,14 +46,33 @@ systemctl start amazon-cloudwatch-agent
 
 apt install -y debian-keyring debian-archive-keyring apt-transport-https curl gpg
 
-# Install Caddy (modern and secure)
-mkdir -p /usr/share/keyrings
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy.list
+mkdir -p /tmp/caddy-build
+cd /tmp/caddy-build
+apt update && apt install -y git
+
+curl -LO https://go.dev/dl/go1.25.3.linux-amd64.tar.gz
+rm -rf /usr/local/go
+tar -C /usr/local -xzf go1.25.3.linux-amd64.tar.gz
+export PATH=/usr/local/go/bin:$PATH
+export GOPATH=/root/go
+export GOCACHE=/tmp/gocache
+export HOME=/root
+mkdir -p "$HOME"
+
+git clone https://github.com/caddyserver/caddy.git
+cd caddy
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+/root/go/bin/xcaddy build --with github.com/caddy-dns/route53
+
+# Move the built caddy binary to /usr/bin
+mv caddy /usr/bin/caddy
+chmod +x /usr/bin/caddy
+
 apt update
 apt install -y wireguard wireguard-tools
 apt-get clean
 
+mkdir -p /etc/caddy
 cat <<'EOF' >/etc/caddy/Caddyfile
 # /etc/caddy/Caddyfile
 
@@ -81,6 +99,7 @@ pigs-in-space.isaidhey.com {
 EOF
 
 caddy validate --config /etc/caddy/Caddyfile
+caddy install --system-service --config /etc/caddy/Caddyfile
 systemctl enable caddy
 systemctl start caddy
 
