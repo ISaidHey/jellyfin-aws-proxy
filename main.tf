@@ -10,16 +10,17 @@ terraform {
 
 provider "aws" {
   region = "us-east-2" # change as needed
-}
-
-locals {
-  tags_common = {
-    Project     = "media"
-    Environment = "production"
-    ManagedBy   = "OpenTofu"
+  default_tags {
+    tags = {
+      Project     = "pigs-in-space"
+      Environment = "production"
+      ManagedBy   = "OpenTofu"
+    }
   }
 }
 
+data "aws_caller_identity" "who_am_i" {}
+data "aws_region" "region" {}
 
 # -------------------
 # VPC
@@ -29,12 +30,9 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-vpc"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-vpc"
+  }
 }
 
 # Public Subnet
@@ -44,24 +42,18 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
   availability_zone       = "us-east-2a"
 
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-public-subnet"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-public-subnet"
+  }
 }
 
 # Internet Gateway
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-igw"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-igw"
+  }
 }
 
 # Route Table
@@ -73,12 +65,9 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.igw.id
   }
 
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-public-rt"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-public-rt"
+  }
 }
 
 # Associate Route Table
@@ -103,6 +92,16 @@ resource "aws_security_group" "ec2_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  # WireGuard
+  ingress {
+    description = "WireGuard inbound"
+    from_port   = 51820
+    to_port     = 51820
+    protocol    = "udp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
 
   # WireGuard
   egress {
@@ -130,12 +129,9 @@ resource "aws_security_group" "ec2_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-ec2-sg"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-ec2-sg"
+  }
 }
 
 # -------------------
@@ -153,8 +149,6 @@ resource "aws_iam_role" "ec2_route53_role" {
     }]
   })
 }
-data aws_caller_identity "who_am_i" {}
-data aws_region "region" {}
 
 resource "aws_iam_policy" "cloudwatch_policy" {
   name        = "pigs-in-space-cloudwatch-policy"
@@ -176,7 +170,7 @@ resource "aws_iam_policy" "cloudwatch_policy" {
 }
 
 resource "aws_cloudwatch_log_group" "cloudwatch_group" {
-  name = "/ec2/isaidhey/pigs-in-space"
+  name              = "/ec2/isaidhey/pigs-in-space"
   retention_in_days = 7
 }
 
@@ -255,13 +249,10 @@ resource "aws_instance" "caddy_ec2" {
   user_data = data.template_file.user_data.rendered
 
   depends_on = [aws_internet_gateway.igw]
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-caddy"
-      SSM  = "enabled"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-caddy"
+    SSM  = "enabled"
+  }
 }
 
 resource "aws_eip" "caddy_eip" {
@@ -269,12 +260,9 @@ resource "aws_eip" "caddy_eip" {
 
   depends_on = [aws_internet_gateway.igw]
 
-  tags = merge(
-    local.tags_common,
-    {
-      Name = "pigs-in-space-eip"
-    }
-  )
+  tags = {
+    Name = "pigs-in-space-eip"
+  }
 }
 
 resource "aws_eip_association" "caddy_eip_assoc" {
