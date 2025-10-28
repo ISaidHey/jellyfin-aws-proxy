@@ -9,18 +9,19 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-2" # change as needed
+  region = var.aws_region # change as needed
   default_tags {
     tags = {
-      Project     = "pigs-in-space"
+      Project     = var.project_name
       Environment = "production"
       ManagedBy   = "OpenTofu"
     }
   }
 }
 
-data "aws_caller_identity" "who_am_i" {}
-data "aws_region" "region" {}
+data "aws_route53_zone" "r53_zone" {
+  zone_id = var.zone_id
+}
 
 # -------------------
 # VPC
@@ -31,7 +32,7 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
 
   tags = {
-    Name = "pigs-in-space-vpc"
+    Name = "${var.project_name}-vpc"
   }
 }
 
@@ -43,7 +44,7 @@ resource "aws_subnet" "public" {
   availability_zone       = "us-east-2a"
 
   tags = {
-    Name = "pigs-in-space-public-subnet"
+    Name = "${var.project_name}-public-subnet"
   }
 }
 
@@ -52,7 +53,7 @@ resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "pigs-in-space-igw"
+    Name = "${var.project_name}-igw"
   }
 }
 
@@ -66,7 +67,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "pigs-in-space-public-rt"
+    Name = "${var.project_name}-public-rt"
   }
 }
 
@@ -80,7 +81,7 @@ resource "aws_route_table_association" "public" {
 # Security Group
 # -------------------
 resource "aws_security_group" "ec2_sg" {
-  name        = "pigs-in-space-ec2-sg"
+  name        = "${var.project_name}-ec2-sg"
   description = "Allow HTTPS inbound and WireGuard outbound"
   vpc_id      = aws_vpc.main.id
 
@@ -146,15 +147,15 @@ resource "aws_security_group" "ec2_sg" {
   }
 
   tags = {
-    Name = "pigs-in-space-ec2-sg"
+    Name = "${var.project_name}-ec2-sg"
   }
 }
 
 # -------------------
 # IAM Role for Route 53 updates
 # -------------------
-resource "aws_iam_role" "ec2_route53_role" {
-  name = "pigs-in-space-ec2-route53-role"
+resource "aws_iam_role" "ec2_role" {
+  name = "${var.project_name}-ec2-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -162,12 +163,17 @@ resource "aws_iam_role" "ec2_route53_role" {
       Action    = "sts:AssumeRole"
       Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
+      Condition = {
+        StringEquals = {
+          "aws:ResourceTag/Project" = var.project_name
+        }
+      }
     }]
   })
 }
 
 resource "aws_iam_policy" "cloudwatch_policy" {
-  name        = "pigs-in-space-cloudwatch-policy"
+  name        = "${var.project_name}-cloudwatch-policy"
   description = "Allow EC2 to write to cloudwatch"
 
   policy = jsonencode({
@@ -179,19 +185,20 @@ resource "aws_iam_policy" "cloudwatch_policy" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:${data.aws_region.region.id}:${data.aws_caller_identity.who_am_i.account_id}:log-group:/ec2/isaidhey/pigs-in-space:*"
+        Resource = "${aws_cloudwatch_log_group.cloudwatch_group.arn}:*"
       }
     ]
   })
+  depends_on = [aws_cloudwatch_log_group.cloudwatch_group]
 }
 
 resource "aws_cloudwatch_log_group" "cloudwatch_group" {
-  name              = "/ec2/isaidhey/pigs-in-space"
+  name              = "/${var.project_name}/ec2"
   retention_in_days = 7
 }
 
 resource "aws_iam_policy" "route53_policy" {
-  name        = "pigs-in-space-route53-policy"
+  name        = "${var.project_name}-route53-policy"
   description = "Allow EC2 to update Route 53 records"
 
   policy = jsonencode({
@@ -204,7 +211,7 @@ resource "aws_iam_policy" "route53_policy" {
           "route53:ChangeResourceRecordSets",
           "route53:ListResourceRecordSets"
         ]
-        Resource = "arn:aws:route53:::hostedzone/${var.zone_id}"
+        Resource = "arn:aws:route53:::hostedzone/${data.aws_route53_zone.r53_zone.zone_id}"
       },
       {
         Sid    = "ListHostedZonesAndChanges"
@@ -222,17 +229,17 @@ resource "aws_iam_policy" "route53_policy" {
 }
 
 resource "aws_iam_role_policy_attachment" "attach_route53" {
-  role       = aws_iam_role.ec2_route53_role.name
+  role       = aws_iam_role.ec2_role.name
   policy_arn = aws_iam_policy.route53_policy.arn
 }
 
 resource "aws_iam_role_policy_attachment" "attach_cloudwatch" {
-  role       = aws_iam_role.ec2_route53_role.name
+  role       = aws_iam_role.ec2_role.name
   policy_arn = aws_iam_policy.cloudwatch_policy.arn
 }
 
 resource "aws_iam_role_policy_attachment" "attach_ssm" {
-  role       = aws_iam_role.ec2_route53_role.name
+  role       = aws_iam_role.ec2_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
@@ -241,22 +248,40 @@ resource "aws_iam_role_policy_attachment" "attach_ssm" {
 # -------------------
 # IAM Instance Profile
 resource "aws_iam_instance_profile" "ec2_profile" {
-  name = "pigs-in-space-ec2-profile"
-  role = aws_iam_role.ec2_route53_role.name
+  name = "${var.project_name}-ec2-profile"
+  role = aws_iam_role.ec2_role.name
+}
+data "template_file" "ec2_cw_agent" {
+  template = file("${path.module}/amazon-cloudwatch-agent.tftpl")
+
+  vars = {
+    ec2_log_group_name = aws_cloudwatch_log_group.cloudwatch_group.name
+  }
 }
 
+data "template_file" "caddyfile" {
+  template = file("${path.module}/Caddyfile.tftpl")
+
+  vars = {
+    domain            = "isaidhey.com"
+    media_server_port = var.media_server_port
+    subdomain         = var.subdomain
+  }
+}
 data "template_file" "user_data" {
   template = file("${path.module}/user_data.sh")
 
   vars = {
     ec2_public_ip = aws_eip.caddy_eip.public_ip
+    cw_agent_json = data.template_file.ec2_cw_agent.rendered
+    caddyfile     = data.template_file.caddyfile.rendered
   }
 
   depends_on = [aws_eip.caddy_eip]
 }
 
 resource "aws_instance" "caddy_ec2" {
-  ami                         = "ami-0cfde0ea8edd312d4" # Ubuntu 24.04 LTS in us-east-2
+  ami                         = var.ubuntu_ami_id
   instance_type               = "t3.micro"
   subnet_id                   = aws_subnet.public.id
   vpc_security_group_ids      = [aws_security_group.ec2_sg.id]
@@ -268,7 +293,7 @@ resource "aws_instance" "caddy_ec2" {
 
   depends_on = [aws_internet_gateway.igw]
   tags = {
-    Name = "pigs-in-space-caddy"
+    Name = "${var.project_name}-caddy"
     SSM  = "enabled"
   }
 }
@@ -279,7 +304,7 @@ resource "aws_eip" "caddy_eip" {
   depends_on = [aws_internet_gateway.igw]
 
   tags = {
-    Name = "pigs-in-space-eip"
+    Name = "${var.project_name}-eip"
   }
 }
 
@@ -293,14 +318,13 @@ resource "aws_eip_association" "caddy_eip_assoc" {
 # -------------------
 # Route 53 Record
 # -------------------
-resource "aws_route53_record" "pigs_in_space_dns" {
-  zone_id = var.zone_id
-  name    = "pigs-in-space"
+resource "aws_route53_record" "subdomain_dns" {
+  zone_id = data.aws_route53_zone.r53_zone.zone_id
+  name    = var.subdomain
   type    = "A"
   ttl     = 300
   records = [aws_eip.caddy_eip.public_ip]
 }
-
 
 output "ec2_public_ip" {
   value = aws_eip.caddy_eip.public_ip

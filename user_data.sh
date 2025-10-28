@@ -8,29 +8,8 @@ for i in {1..5}; do apt update -y && break || sleep 10; done
 curl -Lo /tmp/amazon-cloudwatch-agent.deb https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
 dpkg -i /tmp/amazon-cloudwatch-agent.deb
 
-cat <<'EOF' >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-{
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/var/log/cloud-init.log",
-            "log_group_name": "/ec2/isaidhey/pigs-in-space",
-            "log_stream_name": "{instance_id}-cloud-init",
-            "retention_in_days": 7
-          },
-          {
-            "file_path": "/var/log/cloud-init-output.log",
-            "log_group_name": "/ec2/isaidhey/pigs-in-space",
-            "log_stream_name": "{instance_id}-cloud-init-output",
-            "retention_in_days": 7
-          }
-        ]
-      }
-    }
-  }
-}
+cat <<EOF >/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+${cw_agent_json}
 EOF
 
 chmod 600 /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
@@ -74,28 +53,7 @@ apt-get clean
 
 mkdir -p /etc/caddy
 cat <<'EOF' >/etc/caddy/Caddyfile
-# /etc/caddy/Caddyfile
-
-pigs-in-space.isaidhey.com {
-    encode zstd gzip
-
-    reverse_proxy 10.10.0.2:8096
-
-    tls {
-        dns route53 {
-            max_retries 10
-        }
-    }
-
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        Referrer-Policy "no-referrer-when-downgrade"
-        Permissions-Policy "camera=(), microphone=(), geolocation=()"
-    }
-}
-
+${caddyfile}
 EOF
 
 caddy validate --config /etc/caddy/Caddyfile
