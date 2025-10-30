@@ -21,3 +21,8 @@ In your current session run:
 Then use `t` instead of `tofu`, ie `t plan`, `t apply`, etc.
 
 Alternatively you could set up https://direnv.net/ to read the `.env` file.
+
+## Security Concerns
+ 
+- Currently, all keys (private and public) are all plaintext in the state file, which is a local file.
+- The user_data.sh cat of wg0.conf content does not seem to appear in the logs,

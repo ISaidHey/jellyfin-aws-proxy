@@ -3,7 +3,7 @@
 ${subdomain}.${domain} {
     encode zstd gzip
 
-    reverse_proxy 10.10.0.2:${media_server_port}
+    reverse_proxy ${media_server_ip}:${media_server_port}
 
     tls {
         dns route53 {

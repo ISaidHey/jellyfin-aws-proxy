@@ -4,6 +4,14 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    wireguard = {
+      source  = "OJFord/wireguard"
+      version = "0.4.0"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "2.5.3"
+    }
   }
   required_version = ">= 1.5.0"
 }
@@ -243,6 +251,48 @@ resource "aws_iam_role_policy_attachment" "attach_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# ------------------
+# WireGuard
+# ------------------
+resource "wireguard_asymmetric_key" "peer1" {
+}
+
+resource "wireguard_asymmetric_key" "peer2" {
+}
+
+
+data "wireguard_config_document" "peer1" {
+  addresses   = ["${var.wg_ec2_ip}/24"]
+  listen_port = 51820
+  private_key = wireguard_asymmetric_key.peer1.private_key
+
+  peer {
+    public_key = wireguard_asymmetric_key.peer2.public_key
+    allowed_ips = [
+      var.wg_media_sever_ip,
+    ]
+  }
+}
+
+data "wireguard_config_document" "peer2" {
+  private_key = wireguard_asymmetric_key.peer2.private_key
+  addresses   = ["${var.wg_media_sever_ip}/24"]
+
+  peer {
+    public_key = wireguard_asymmetric_key.peer1.public_key
+    endpoint   = "${aws_eip.caddy_eip.public_ip}:51820"
+    allowed_ips = [
+      "${var.wg_ec2_ip}/32",
+    ]
+    persistent_keepalive = 25
+  }
+}
+
+resource "local_file" "client-dot-conf" {
+  filename = "wg-client.conf"
+  content  = data.wireguard_config_document.peer2.conf
+}
+
 # -------------------
 # EC2 Instance
 # -------------------
@@ -250,34 +300,6 @@ resource "aws_iam_role_policy_attachment" "attach_ssm" {
 resource "aws_iam_instance_profile" "ec2_profile" {
   name = "${var.project_name}-ec2-profile"
   role = aws_iam_role.ec2_role.name
-}
-data "template_file" "ec2_cw_agent" {
-  template = file("${path.module}/amazon-cloudwatch-agent.tftpl")
-
-  vars = {
-    ec2_log_group_name = aws_cloudwatch_log_group.cloudwatch_group.name
-  }
-}
-
-data "template_file" "caddyfile" {
-  template = file("${path.module}/Caddyfile.tftpl")
-
-  vars = {
-    domain            = "isaidhey.com"
-    media_server_port = var.media_server_port
-    subdomain         = var.subdomain
-  }
-}
-data "template_file" "user_data" {
-  template = file("${path.module}/user_data.sh")
-
-  vars = {
-    ec2_public_ip = aws_eip.caddy_eip.public_ip
-    cw_agent_json = data.template_file.ec2_cw_agent.rendered
-    caddyfile     = data.template_file.caddyfile.rendered
-  }
-
-  depends_on = [aws_eip.caddy_eip]
 }
 
 resource "aws_instance" "caddy_ec2" {
@@ -289,9 +311,25 @@ resource "aws_instance" "caddy_ec2" {
   iam_instance_profile        = aws_iam_instance_profile.ec2_profile.name
   monitoring                  = true
 
-  user_data = data.template_file.user_data.rendered
+  user_data = templatefile("${path.module}/user_data.sh", {
+    ec2_public_ip = aws_eip.caddy_eip.public_ip
+    cw_agent_json = templatefile("${path.module}/amazon-cloudwatch-agent.tftpl", {
+      ec2_log_group_name = aws_cloudwatch_log_group.cloudwatch_group.name
+    })
+    caddyfile = templatefile("${path.module}/Caddyfile.tftpl", {
+      domain            = var.domain
+      media_server_port = var.media_server_port
+      media_server_ip   = var.wg_media_sever_ip
+      subdomain         = var.subdomain
+    })
+    region  = var.aws_region
+    wg0conf = data.wireguard_config_document.peer1.conf
+  })
 
-  depends_on = [aws_internet_gateway.igw]
+  depends_on = [
+    aws_internet_gateway.igw,
+    aws_eip.caddy_eip
+  ]
   tags = {
     Name = "${var.project_name}-caddy"
     SSM  = "enabled"

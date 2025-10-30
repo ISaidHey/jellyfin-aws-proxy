@@ -71,6 +71,8 @@ Restart=on-failure
 User=root
 Group=root
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=append:/var/log/caddy.log
+StandardError=append:/var/log/caddy.log
 
 [Install]
 WantedBy=multi-user.target
@@ -80,22 +82,8 @@ systemctl daemon-reload
 systemctl enable caddy
 systemctl start caddy
 
-SERVER_PRIV_KEY=$(wg genkey)
-SERVER_PUB_KEY=$(echo "$SERVER_PRIV_KEY" | wg pubkey)
-
-CLIENT_PRIV_KEY=$(wg genkey)
-CLIENT_PUB_KEY=$(echo "$CLIENT_PRIV_KEY" | wg pubkey)
-
 cat <<EOF >/etc/wireguard/wg0.conf
-[Interface]
-Address = 10.10.0.1/24
-ListenPort = 51820
-PrivateKey = $SERVER_PRIV_KEY
-SaveConfig = true
-
-[Peer]
-PublicKey = $CLIENT_PUB_KEY
-AllowedIPs = 10.10.0.2/32
+${wg0conf}
 EOF
 
 sysctl -w net.ipv4.ip_forward=1
@@ -103,25 +91,3 @@ echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
 systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
-
-cat <<EOF >/home/ubuntu/wg-client.conf
-[Interface]
-PrivateKey = $CLIENT_PRIV_KEY
-Address = 10.10.0.2/24
-DNS = 1.1.1.1
-
-[Peer]
-PublicKey = $SERVER_PUB_KEY
-Endpoint = ${ec2_public_ip}:51820
-AllowedIPs = 10.10.0.1/32
-PersistentKeepalive = 25
-EOF
-
-chown ubuntu:ubuntu /home/ubuntu/wg-client.conf
-chmod 600 /home/ubuntu/wg-client.conf
-
-# Cleanup sensitive variables
-unset CLIENT_PRIV_KEY
-unset CLIENT_PUB_KEY
-unset SERVER_PRIV_KEY
-unset SERVER_PUB_KEY
