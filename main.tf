@@ -222,6 +222,15 @@ resource "aws_iam_policy" "route53_policy" {
         Resource = "arn:aws:route53:::hostedzone/${data.aws_route53_zone.r53_zone.zone_id}"
       },
       {
+        "Effect": "Allow",
+        "Action": [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:PutSecretValue",
+          "secretsmanager:CreateSecret"
+        ],
+        "Resource": "arn:aws:secretsmanager:${var.aws_region}:*:secret:caddy-cert-*"
+      },
+      {
         Sid    = "ListHostedZonesAndChanges"
         Effect = "Allow"
         Action = [
@@ -324,6 +333,9 @@ resource "aws_instance" "caddy_ec2" {
     })
     region  = var.aws_region
     wg0conf = data.wireguard_config_document.peer1.conf
+
+    domain = var.domain
+    subdomain = var.subdomain
   })
 
   depends_on = [
