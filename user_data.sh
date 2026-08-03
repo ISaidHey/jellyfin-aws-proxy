@@ -104,11 +104,12 @@ EOF
 }
 
 function restoreCerts() {
-  CERT_SECRET_NAME="caddy-cert-${subdomain}.${domain}"
+  # One secret covers every proxied service's certs - Caddy stores them all
+  # under the same acme directory, organized by hostname subfolder already.
+  CERT_SECRET_NAME="caddy-certs-${project_name}"
+  CERTS_DIR="/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory"
 
   echo "Checking for existing TLS certs in Secrets Manager: $CERT_SECRET_NAME"
-  #CERTS_DIR="/root/.local/share/caddy/certificates/acme-staging-v02.api.letsencrypt.org-directory/${subdomain}.${domain}"
-  CERTS_DIR="/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${subdomain}.${domain}"
   mkdir -p "$CERTS_DIR"
 
   if aws secretsmanager get-secret-value --secret-id "$CERT_SECRET_NAME" --region "${region}" >/tmp/secret.json 2>/dev/null; then
@@ -123,32 +124,45 @@ function restoreCerts() {
 function backupCerts() {
   # --- Backup new Caddy certs to AWS Secrets Manager ---
   echo "Backing up TLS certs to Secrets Manager..."
-  CERT_SECRET_NAME="caddy-cert-${subdomain}.${domain}"
+  CERT_SECRET_NAME="caddy-certs-${project_name}"
+  CERTS_DIR="/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory"
 
+  EXPECTED_CERTS=(
+%{ for svc in services ~}
+    "$CERTS_DIR/${svc.subdomain}.${domain}/${svc.subdomain}.${domain}.crt"
+%{ endfor ~}
+  )
 
-  CERTS_DIR="/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory/${subdomain}.${domain}"
   for i in {1..30}; do
-    if [ -f "$CERTS_DIR/${subdomain}.${domain}.crt" ] && [ -f "$CERTS_DIR/${subdomain}.${domain}.key" ]; then
-      echo "Certificate and key found — continuing."
+    all_found=true
+    for f in "$${EXPECTED_CERTS[@]}"; do
+      [ -f "$f" ] || all_found=false
+    done
+    if [ "$all_found" = true ]; then
+      echo "All certificates found — continuing."
       break
     fi
     echo "Waiting for Caddy to finish certificate issuance..."
     sleep 10
   done
 
-  if [ ! -f "$CERTS_DIR/${subdomain}.${domain}.crt" ]; then
-    echo "ERROR: No certificate found after waiting. Skipping backup."
+  missing=false
+  for f in "$${EXPECTED_CERTS[@]}"; do
+    [ -f "$f" ] || { echo "ERROR: missing $f"; missing=true; }
+  done
+  if [ "$missing" = true ]; then
+    echo "ERROR: Not all certificates were found after waiting. Skipping backup."
     return 1
   fi
 
   set +x
   CERTS_ARCHIVE="/tmp/certs.tar.gz"
-  tar -czf "$CERTS_ARCHIVE" -C "/root/.local/share/caddy/certificates/acme-v02.api.letsencrypt.org-directory" .
+  tar -czf "$CERTS_ARCHIVE" -C "$CERTS_DIR" .
   CERTS_BASE64=$(base64 -w 0 "$CERTS_ARCHIVE")
 
   if ! aws secretsmanager create-secret \
     --name "$CERT_SECRET_NAME" \
-    --description "TLS certs for ${subdomain}.${domain}" \
+    --description "TLS certs for ${project_name}" \
     --region "${region}" \
     --secret-binary "$CERTS_BASE64" 2>/dev/null; then
     echo "Secret already exists, updating..."

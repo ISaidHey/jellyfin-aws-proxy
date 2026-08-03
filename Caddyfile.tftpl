@@ -1,9 +1,10 @@
 # /etc/caddy/Caddyfile
 
-${subdomain}.${domain} {
+%{ for svc in services ~}
+${svc.subdomain}.${domain} {
     encode zstd gzip
 
-    reverse_proxy ${media_server_ip}:${media_server_port}
+    reverse_proxy ${media_server_ip}:${svc.port}
 
     tls {
         dns route53 {
@@ -19,3 +20,5 @@ ${subdomain}.${domain} {
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
     }
 }
+
+%{ endfor ~}

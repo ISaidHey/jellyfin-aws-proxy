@@ -264,6 +264,7 @@ resource "aws_iam_role_policy_attachment" "attach_ssm" {
 # WireGuard
 # ------------------
 resource "wireguard_asymmetric_key" "peer1" {
+  private_key = var.wg_ec2_private_key
 }
 
 resource "wireguard_asymmetric_key" "peer2" {
@@ -326,16 +327,16 @@ resource "aws_instance" "caddy_ec2" {
       ec2_log_group_name = aws_cloudwatch_log_group.cloudwatch_group.name
     })
     caddyfile = templatefile("${path.module}/Caddyfile.tftpl", {
-      domain            = var.domain
-      media_server_port = var.media_server_port
-      media_server_ip   = var.wg_media_sever_ip
-      subdomain         = var.subdomain
+      domain          = var.domain
+      media_server_ip = var.wg_media_sever_ip
+      services        = var.proxied_services
     })
     region  = var.aws_region
     wg0conf = data.wireguard_config_document.peer1.conf
 
-    domain = var.domain
-    subdomain = var.subdomain
+    domain       = var.domain
+    project_name = var.project_name
+    services     = var.proxied_services
   })
 
   depends_on = [
@@ -369,11 +370,21 @@ resource "aws_eip_association" "caddy_eip_assoc" {
 # Route 53 Record
 # -------------------
 resource "aws_route53_record" "subdomain_dns" {
+  for_each = { for svc in var.proxied_services : svc.subdomain => svc }
+
   zone_id = data.aws_route53_zone.r53_zone.zone_id
-  name    = var.subdomain
+  name    = "${each.value.subdomain}.${var.domain}"
   type    = "A"
   ttl     = 300
   records = [aws_eip.caddy_eip.public_ip]
+}
+
+# Preserves the already-imported pigs-in-space record's state across the
+# scalar -> for_each conversion, so Tofu remaps it instead of destroying and
+# recreating a live, working DNS record.
+moved {
+  from = aws_route53_record.subdomain_dns
+  to   = aws_route53_record.subdomain_dns["pigs-in-space"]
 }
 
 output "ec2_public_ip" {
